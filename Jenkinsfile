@@ -7,13 +7,16 @@ pipeline {
     }
   }
 
-  options { skipDefaultCheckout(true); timestamps() }
+  options {
+    skipDefaultCheckout(true)
+    timestamps()
+  }
 
   environment {
     REPORT_DIR = "security-reports"
-    SEMGREP_FAIL_ON = "ERROR"
-    TRIVY_FAIL_ON   = "HIGH,CRITICAL"
-    JENKINS_CONTAINER = "jenkins"   // ← ชื่อคอนเทนเนอร์ Jenkins บนเครื่องคุณ
+    SEMGREP_FAIL_ON = "ERROR"           // ล้มเมื่อเจอระดับสูง
+    TRIVY_FAIL_ON   = "HIGH,CRITICAL"   // ล้มเมื่อเจอ HIGH/CRITICAL
+    JENKINS_CONTAINER = "jenkins"       // ← ปรับให้ตรงกับชื่อคอนเทนเนอร์ Jenkins ของคุณ
   }
 
   stages {
@@ -24,6 +27,7 @@ pipeline {
       }
     }
 
+    // ใช้ python:3.11-slim + pip install semgrep เพื่อเลี่ยง requirement /src
     stage('Semgrep (OWASP)') {
       steps {
         sh '''
@@ -31,13 +35,15 @@ pipeline {
           docker run --rm \
             --volumes-from "${JENKINS_CONTAINER}" \
             -w "$WORKSPACE" \
-            returntocorp/semgrep:latest \
+            python:3.11-slim bash -lc "
+              pip install --no-cache-dir -q semgrep &&
               semgrep \
                 --config=p/owasp-top-ten \
                 --config=p/python \
-                --severity "${SEMGREP_FAIL_ON}" \
-                --sarif --output "${WORKSPACE}/${REPORT_DIR}/semgrep.sarif" \
+                --severity \\"${SEMGREP_FAIL_ON}\\" \
+                --sarif --output ${REPORT_DIR}/semgrep.sarif \
                 --error
+            "
           SEMGREP_RC=$?
           set -e
 
