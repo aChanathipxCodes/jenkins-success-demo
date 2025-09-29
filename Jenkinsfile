@@ -10,13 +10,12 @@ pipeline {
   options {
     skipDefaultCheckout(true)
     timestamps()
-    wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm'])
   }
 
   environment {
     REPORT_DIR = "security-reports"
-    SEMGREP_FAIL_ON = "ERROR"
-    TRIVY_FAIL_ON   = "HIGH,CRITICAL"
+    SEMGREP_FAIL_ON = "ERROR"           // เกณฑ์ล้มงานของ Semgrep
+    TRIVY_FAIL_ON   = "HIGH,CRITICAL"   // เกณฑ์ล้มงานของ Trivy
   }
 
   stages {
@@ -41,7 +40,6 @@ pipeline {
           SEMGREP_RC=$?
           set -e
 
-          # ถ้าไม่มีรายงานให้สร้างไฟล์เปล่าเพื่อให้ Warnings อ่านได้
           [ -f ${REPORT_DIR}/semgrep.sarif ] || echo '{"version":"2.1.0","runs":[]}' > ${REPORT_DIR}/semgrep.sarif
 
           if [ "${SEMGREP_RC:-0}" -ne 0 ]; then
