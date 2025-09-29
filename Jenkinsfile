@@ -11,13 +11,11 @@ pipeline {
 
   environment {
     REPORT_DIR        = "security-reports"
-    // เข้มขึ้น: ให้ Semgrep ล้มตั้งแต่ WARNING ขึ้นไป
+    // ให้ Semgrep drop ตั้งแต่ WARNING ขึ้นไป
     SEMGREP_FAIL_ON   = "WARNING"
-    // เข้มขึ้น: ให้ Trivy ล้มตั้งแต่ LOW ขึ้นไปทั้งหมด
+    // ให้ Trivy drop ตั้งแต่ LOW ขึ้นไปทั้งหมด
     TRIVY_FAIL_ON     = "LOW,MEDIUM,HIGH,CRITICAL"
-    // ตั้งค่าให้ล้มแน่ ๆ เพื่อเดโม (เปลี่ยนเป็น "false" หากไม่ต้องการล้ม)
-    DEMO_FAIL         = "true"
-    // เปลี่ยนให้ตรงกับชื่อคอนเทนเนอร์ Jenkins ของคุณ
+    DEMO_FAIL         = "false"
     JENKINS_CONTAINER = "jenkins"
   }
 
@@ -119,7 +117,6 @@ pipeline {
       }
     }
 
-    // บังคับให้ล้มแน่นอนเพื่อเดโม (ปิดได้ด้วย DEMO_FAIL=false)
     stage('Force Failure (Demo)') {
       steps {
         sh '''
