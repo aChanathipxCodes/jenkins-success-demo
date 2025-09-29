@@ -2,21 +2,23 @@ pipeline {
   agent {
     docker {
       image 'docker:25.0.3-cli'
-      args '-v /var/run/docker.sock:/var/run/docker.sock'
+      args '-v /var/run/docker.sock:/var/run/docker.sock --entrypoint=""'
       reuseNode true
     }
   }
 
-  options {
-    skipDefaultCheckout(true)
-    timestamps()
-  }
+  options { skipDefaultCheckout(true); timestamps() }
 
   environment {
-    REPORT_DIR = "security-reports"
-    SEMGREP_FAIL_ON = "ERROR"           // ล้มเมื่อเจอระดับสูง
-    TRIVY_FAIL_ON   = "HIGH,CRITICAL"   // ล้มเมื่อเจอ HIGH/CRITICAL
-    JENKINS_CONTAINER = "jenkins"       // ← ปรับให้ตรงกับชื่อคอนเทนเนอร์ Jenkins ของคุณ
+    REPORT_DIR        = "security-reports"
+    // เข้มขึ้น: ให้ Semgrep ล้มตั้งแต่ WARNING ขึ้นไป
+    SEMGREP_FAIL_ON   = "WARNING"
+    // เข้มขึ้น: ให้ Trivy ล้มตั้งแต่ LOW ขึ้นไปทั้งหมด
+    TRIVY_FAIL_ON     = "LOW,MEDIUM,HIGH,CRITICAL"
+    // ตั้งค่าให้ล้มแน่ ๆ เพื่อเดโม (เปลี่ยนเป็น "false" หากไม่ต้องการล้ม)
+    DEMO_FAIL         = "true"
+    // เปลี่ยนให้ตรงกับชื่อคอนเทนเนอร์ Jenkins ของคุณ
+    JENKINS_CONTAINER = "jenkins"
   }
 
   stages {
@@ -27,37 +29,30 @@ pipeline {
       }
     }
 
-    // ใช้ python:3.11-slim + pip install semgrep เพื่อเลี่ยง requirement /src
-    stage('Semgrep (OWASP)') {
+    stage('Semgrep (OWASP, strict)') {
       steps {
         sh '''
-          set +e
+          set -e
           docker run --rm \
             --volumes-from "${JENKINS_CONTAINER}" \
             -w "$WORKSPACE" \
             python:3.11-slim bash -lc "
+              apt-get update -qq && apt-get install -y -qq git >/dev/null &&
               pip install --no-cache-dir -q semgrep &&
+              # ใช้ --no-git + include ให้กวาดไฟล์ .py ทั้งหมด แม้ repo จะไม่มี git metadata ใน container
               semgrep \
                 --config=p/owasp-top-ten \
                 --config=p/python \
+                --no-git --include '**/*.py' \
                 --severity \\"${SEMGREP_FAIL_ON}\\" \
                 --sarif --output ${REPORT_DIR}/semgrep.sarif \
                 --error
             "
-          SEMGREP_RC=$?
-          set -e
-
-          [ -f "${REPORT_DIR}/semgrep.sarif" ] || echo '{"version":"2.1.0","runs":[]}' > "${REPORT_DIR}/semgrep.sarif"
-
-          if [ "${SEMGREP_RC:-0}" -ne 0 ]; then
-            echo "Semgrep found issues at severity ${SEMGREP_FAIL_ON}."
-            exit 1
-          fi
         '''
       }
     }
 
-    stage('Bandit (Python SAST)') {
+    stage('Bandit (Python SAST) - strict (ไม่เป็น gate)') {
       steps {
         sh '''
           docker run --rm \
@@ -65,35 +60,37 @@ pipeline {
             -w "$WORKSPACE" \
             python:3.11-slim bash -lc "
               pip install --no-cache-dir -q bandit==1.* &&
+              # ระดับ -ll (medium/high) เก็บรายงานไว้ดู แต่ไม่ทำให้ล้ม
               bandit -r . -ll -f json -o ${REPORT_DIR}/bandit.json || true
             "
         '''
       }
     }
 
-    stage('pip-audit (Dependencies)') {
+    stage('pip-audit (Dependencies) - strict (ไม่เป็น gate)') {
       steps {
         sh '''
-          REQS=$(ls -1 requirements*.txt 2>/dev/null || true)
-          if [ -n "$REQS" ]; then
-            docker run --rm \
-              --volumes-from "${JENKINS_CONTAINER}" \
-              -w "$WORKSPACE" \
-              python:3.11-slim bash -lc "
-                pip install --no-cache-dir -q pip-audit &&
-                for f in ${REQS}; do
-                  echo Running pip-audit on $f
-                  pip-audit -r $f -f json -o ${REPORT_DIR}/pip-audit_${f%.txt}.json || true
-                done
-              "
-          else
-            echo "No requirements*.txt found, skipping pip-audit."
-          fi
+          docker run --rm \
+            --volumes-from "${JENKINS_CONTAINER}" \
+            -w "$WORKSPACE" \
+            python:3.11-slim bash -lc "
+              set -e
+              pip install --no-cache-dir -q pip-audit
+              shopt -s nullglob
+              files=(requirements*.txt)
+              if [ \\${#files[@]} -eq 0 ]; then
+                echo 'No requirements*.txt found, skipping pip-audit.'; exit 0
+              fi
+              for f in \\"\\${files[@]}\\"; do
+                echo Running pip-audit on \\"$f\\"
+                pip-audit -r \\"$f\\" -f json -o \\"${REPORT_DIR}/pip-audit_$(basename \\"$f\\" .txt).json\\" || true
+              done
+            "
         '''
       }
     }
 
-    stage('Trivy FS (Secrets & Misconfig)') {
+    stage('Trivy FS (vuln/misconfig/secret) - strict') {
       steps {
         sh '''
           set +e
@@ -101,18 +98,15 @@ pipeline {
             --volumes-from "${JENKINS_CONTAINER}" \
             -w "$WORKSPACE" \
             aquasec/trivy:latest fs . \
-              --security-checks vuln,secret,config \
+              --scanners vuln,misconfig,secret \
               --severity ${TRIVY_FAIL_ON} \
               --format sarif --output ${REPORT_DIR}/trivy.sarif \
               --exit-code 1
           TRIVY_RC=$?
           set -e
-
-          [ -f "${REPORT_DIR}/trivy.sarif" ] || echo '{"version":"2.1.0","runs":[]}' > "${REPORT_DIR}/trivy.sarif"
-
-          if [ "${TRIVY_RC:-0}" -ne 0 ]; then
-            echo "Trivy found findings at ${TRIVY_FAIL_ON}."
-            exit 1
+          # ถ้าต้องการบังคับให้ fail ไม่ว่าอย่างไร ให้ปล่อย TRIVY_RC ใช้ค่าเดิม
+          if [ "${TRIVY_RC}" -ne 0 ]; then
+            echo "Trivy found findings at ${TRIVY_FAIL_ON}."; exit 1
           fi
         '''
       }
@@ -124,11 +118,25 @@ pipeline {
         archiveArtifacts artifacts: "${REPORT_DIR}/**", allowEmptyArchive: true
       }
     }
+
+    // บังคับให้ล้มแน่นอนเพื่อเดโม (ปิดได้ด้วย DEMO_FAIL=false)
+    stage('Force Failure (Demo)') {
+      steps {
+        sh '''
+          if [ "${DEMO_FAIL}" = "true" ]; then
+            echo "Forcing FAILURE for demo purpose (set DEMO_FAIL=false to disable)."
+            exit 1
+          else
+            echo "DEMO_FAIL=false -> not forcing failure."
+          fi
+        '''
+      }
+    }
   }
 
   post {
     always  { echo "Scan completed. Reports archived in ${REPORT_DIR}/" }
-    failure { echo "Build failed due to security findings. See Warnings and artifacts." }
-    success { echo "Build succeeded. No blocking security findings." }
+    failure { echo "Build failed (strict demo). See Warnings and artifacts for details." }
+    success { echo "Build succeeded (you probably set DEMO_FAIL=false or no strict findings were hit)." }
   }
 }
