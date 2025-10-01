@@ -14,9 +14,9 @@ pipeline {
 
   environment {
     REPORT_DIR = "security-reports"
-    SEMGREP_FAIL_ON = "ERROR"           // ล้มเมื่อเจอระดับสูง
-    TRIVY_FAIL_ON   = "HIGH,CRITICAL"   // ล้มเมื่อเจอ HIGH/CRITICAL
-    JENKINS_CONTAINER = "jenkins"       // ← ปรับให้ตรงกับชื่อคอนเทนเนอร์ Jenkins ของคุณ
+    SEMGREP_FAIL_ON = "ERROR"
+    TRIVY_FAIL_ON   = "HIGH,CRITICAL"
+    JENKINS_CONTAINER = "jenkins"
   }
 
   stages {
@@ -27,7 +27,6 @@ pipeline {
       }
     }
 
-    // ใช้ python:3.11-slim + pip install semgrep เพื่อเลี่ยง requirement /src
     stage('Semgrep (OWASP)') {
       steps {
         sh '''
